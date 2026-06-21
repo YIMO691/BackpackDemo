@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -35,7 +34,16 @@ public class InventorySearchPanel : MonoBehaviour
     public List<InventoryItemData> Items = new List<InventoryItemData>();
 
     private InventoryItemData _selectedItem;
-    private float _refreshTimer;
+
+    // Slot reuse pool (GC Fix #4, #5)
+    private List<InventoryItemSlot> _activeSlots = new List<InventoryItemSlot>();
+
+    // Cached result list (GC Fix #2)
+    private List<InventoryItemData> _filteredResults = new List<InventoryItemData>();
+
+    // Cached comparison delegate to avoid lambda allocation in Sort (GC Fix #2)
+    private static readonly Comparison<InventoryItemData> NameComparison =
+        (a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
 
     private void Start()
     {
@@ -55,58 +63,94 @@ public class InventorySearchPanel : MonoBehaviour
         RefreshList();
     }
 
-    private void Update()
-    {
-        _refreshTimer += Time.deltaTime;
-        if (_refreshTimer > 0.2f)
-        {
-            _refreshTimer = 0f;
-            RefreshList();
-        }
-    }
+    // GC Fix #1: Removed Update() timer-based refresh. RefreshList is now event-driven
+    // via SearchInput.onValueChanged, TypeDropdown.onValueChanged, and OnClickItem.
 
     private void RefreshList()
     {
         string keyword = SearchInput.text;
         InventoryItemType selectedType = (InventoryItemType)TypeDropdown.value;
 
-        for (int i = ContentRoot.childCount - 1; i >= 0; i--)
+        // GC Fix #2: Replace LINQ Where/OrderBy/ToList with for-loop + cached list
+        _filteredResults.Clear();
+
+        bool filterByType = selectedType != InventoryItemType.All;
+        bool filterByKeyword = !string.IsNullOrEmpty(keyword);
+
+        for (int i = 0; i < Items.Count; i++)
         {
-            Destroy(ContentRoot.GetChild(i).gameObject);
+            InventoryItemData item = Items[i];
+
+            if (filterByType && item.Type != selectedType)
+                continue;
+
+            // GC Fix #3: IndexOf with OrdinalIgnoreCase instead of ToLower().Contains()
+            if (filterByKeyword && item.Name.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
+            _filteredResults.Add(item);
         }
 
-        List<InventoryItemData> result = Items
-            .Where(item =>
-                (selectedType == InventoryItemType.All || item.Type == selectedType) &&
-                (string.IsNullOrEmpty(keyword) || item.Name.ToLower().Contains(keyword.ToLower())))
-            .OrderBy(item => item.Name)
-            .ToList();
+        _filteredResults.Sort(NameComparison);
 
-        CountText.text = "Count: " + result.Count + " / " + Items.Count;
+        CountText.text = "Count: " + _filteredResults.Count + " / " + Items.Count;
 
-        foreach (InventoryItemData item in result)
+        // GC Fix #4 & #5: Reuse slots instead of Destroy/Instantiate; cache component refs
+        int resultCount = _filteredResults.Count;
+
+        // Grow pool if needed
+        while (_activeSlots.Count < resultCount)
         {
             GameObject slotObj = Instantiate(SlotPrefab, ContentRoot);
             InventoryItemSlot slot = slotObj.GetComponent<InventoryItemSlot>();
-
-            bool selected = _selectedItem != null && _selectedItem.Id == item.Id;
-
-            slot.SetData(item, $"{item.Name} x{item.Count} [{item.Type}]", selected, OnClickItem);
+            _activeSlots.Add(slot);
         }
 
-        if (_selectedItem != null && !result.Any(item => item.Id == _selectedItem.Id))
+        for (int i = 0; i < _activeSlots.Count; i++)
         {
-            _selectedItem = null;
-            DetailText.text = "No item selected";
+            InventoryItemSlot slot = _activeSlots[i];
+
+            if (i < resultCount)
+            {
+                InventoryItemData item = _filteredResults[i];
+                bool selected = _selectedItem != null && _selectedItem.Id == item.Id;
+
+                slot.gameObject.SetActive(true);
+                // GC Fix #7: display string computed inside SetData, not pre-interpolated here
+                slot.SetData(item, selected, OnClickItem);
+            }
+            else
+            {
+                slot.gameObject.SetActive(false);
+            }
         }
 
-        Debug.Log($"Inventory refreshed at {DateTime.Now}, result count = {result.Count}");
+        // GC Fix #2 continued: Replace LINQ Any with manual loop
+        if (_selectedItem != null)
+        {
+            bool found = false;
+            for (int i = 0; i < _filteredResults.Count; i++)
+            {
+                if (_filteredResults[i].Id == _selectedItem.Id)
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                _selectedItem = null;
+                DetailText.text = "No item selected";
+            }
+        }
+
+        // GC Fix #6: Removed high-frequency Debug.Log
     }
 
     private void OnClickItem(InventoryItemData item)
     {
         _selectedItem = item;
-        DetailText.text = $"Name: {item.Name}\nType: {item.Type}\nCount: {item.Count}";
+        DetailText.text = "Name: " + item.Name + "\nType: " + item.Type + "\nCount: " + item.Count;
         RefreshList();
     }
 }
@@ -122,12 +166,14 @@ public class InventoryItemSlot : MonoBehaviour
     private InventoryItemData _item;
     private Action<InventoryItemData> _onClick;
 
-    public void SetData(InventoryItemData item, string displayName, bool selected, Action<InventoryItemData> onClick)
+    // GC Fix #7: Removed displayName parameter. Display text is now built inside SetData
+    // to avoid intermediate string allocation in RefreshList.
+    public void SetData(InventoryItemData item, bool selected, Action<InventoryItemData> onClick)
     {
         _item = item;
         _onClick = onClick;
 
-        NameText.text = displayName;
+        NameText.text = item.Name + " x" + item.Count + " [" + item.Type + "]";
         CountText.text = "x" + item.Count;
         TypeText.text = item.Type.ToString();
         SelectedFrame.gameObject.SetActive(selected);
