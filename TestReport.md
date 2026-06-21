@@ -1,152 +1,87 @@
-# TestReport.md — Backpack Filter UI Verification
+# TestReport.md — InventorySearchPanel GC Fix
 
-## Scope
+## Test Environment
 
-Static code review only (no Unity Editor available). This report distinguishes what can be verified by reading source code vs. what requires a running Unity Editor instance.
+- **Unity Version**: 2022.3 (project configured)
+- **Test Runner**: UNVERIFIED — Unity Editor not available in this environment
+- **Profiler**: UNVERIFIED — cannot capture Profiler data
 
----
+## Functional Tests
 
-## 1. Verifiable by Code Review (Static Analysis)
+All functional tests below are marked **UNVERIFIED** because the Unity Editor cannot be executed in this environment. The following analysis is based on code review of the modified logic.
 
-### 1.1 Data Model
+### Test 1: Search by name (case-insensitive)
 
-| Check | Status | Notes |
-|---|---|---|
-| ItemType enum has 3 values (Equipment, Consumable, Material) | PASS | `ItemType.cs:3-8`, matches SDD §6 |
-| ItemData is [Serializable], plain class, no MonoBehaviour | PASS | `ItemData.cs:5-6`, matches SDD §6 |
-| ItemData fields: Name (string), Type (ItemType), Count (int) | PASS | `ItemData.cs:8-10`, matches SDD §6 |
-| InventoryMockData.GetItems() returns 6 items | PASS | `InventoryMockData.cs:7-15` |
-| Mock item names/types/counts match SDD exactly | PASS | 铁剑/Equipment/1, 木盾/Equipment/1, 小血瓶/Consumable/5, 小蓝瓶/Consumable/3, 铁矿石/Material/12, 木材/Material/20 |
-| Mock data is standalone (not mixed into production code) | PASS | Separate `InventoryMockData.cs` file, static class |
+| Aspect | Status |
+|--------|--------|
+| Exact match (e.g., "Iron Sword") | UNVERIFIED — code uses IndexOf with OrdinalIgnoreCase, should match |
+| Case-insensitive (e.g., "iron sword") | UNVERIFIED — OrdinalIgnoreCase handles this correctly |
+| Partial match (e.g., "Potion") | UNVERIFIED — IndexOf finds substring, returns 2 items (Small HP, Small MP) |
+| No match (e.g., "zzz") | UNVERIFIED — should return empty list |
+| Empty search field | UNVERIFIED — filterByKeyword=false, shows all items matching type filter |
 
-### 1.2 Filter Logic
+### Test 2: Type dropdown filter
 
-| Check | Status | Notes |
-|---|---|---|
-| "全部" button passes null filter (show all) | PASS | `InventoryPanel.cs:37` → `OnFilterClicked(null)` |
-| Equipment button passes ItemType.Equipment | PASS | `InventoryPanel.cs:38` |
-| Consumable button passes ItemType.Consumable | PASS | `InventoryPanel.cs:39` |
-| Material button passes ItemType.Material | PASS | `InventoryPanel.cs:40` |
-| Filter delegates to RefreshList which applies predicate | PASS | `InventoryPanel.cs:69-78` |
-| AllItems copied to new list on "show all" (no mutation) | PASS | `InventoryPanel.cs:78` — `new List<ItemData>(allItems)` |
+| Aspect | Status |
+|--------|--------|
+| "All" shows all items | UNVERIFIED — filterByType=false, all items pass type check |
+| "Equipment" shows Iron Sword, Wood Shield | UNVERIFIED — type comparison correct |
+| "Consumable" shows Small HP Potion, Small MP Potion | UNVERIFIED — type comparison correct |
+| "Material" shows Iron Ore, Wood | UNVERIFIED — type comparison correct |
 
-### 1.3 Selection Logic
+### Test 3: Combined search + type filter
 
-| Check | Status | Notes |
-|---|---|---|
-| Single selection: SelectItem replaces previous | PASS | `InventoryPanel.cs:117-125`, `selectedItem = item` overwrites |
-| Click same item → no-op (early return) | PASS | `InventoryPanel.cs:139-143`, `OnSlotClicked` returns if `selectedItem == item` |
-| ClearSelection sets selectedItem to null | PASS | `InventoryPanel.cs:130-135` |
-| Duplicate click on already-selected slot → no RefreshList call | PASS | `OnSlotClicked` returns before calling `SelectItem` |
+| Aspect | Status |
+|--------|--------|
+| Search "iron" + Type "Equipment" = Iron Sword | UNVERIFIED — both filters applied with AND logic |
+| Search "potion" + Type "Consumable" = 2 results | UNVERIFIED |
 
-### 1.4 Filter + Selection Interaction
+### Test 4: Item click selection
 
-| Check | Status | Notes |
-|---|---|---|
-| Filter to category not containing selection → selection cleared | PASS | `InventoryPanel.cs:54-59`: checks `selectedItem.Type != filter.Value` |
-| Filter to category containing selection → selection preserved | PASS | `InventoryPanel.cs:103`: `selectedItem == item` reference equality, item remains in filtered list |
-| Filter to "全部" → selection preserved | PASS | `filter.HasValue` is false, skips the clear check |
-| After clear, detail shows "未选择道具" | PASS | `InventoryPanel.cs:164` |
-| After select, detail shows Name + Type + Count | PASS | `InventoryPanel.cs:160` |
+| Aspect | Status |
+|--------|--------|
+| Click item sets _selectedItem | UNVERIFIED — OnClickItem sets field and refreshes |
+| DetailText updates on click | UNVERIFIED — DetailText.text set with Name/Type/Count |
+| SelectedFrame shows on correct slot | UNVERIFIED — `selected` bool computed from _selectedItem.Id == item.Id |
 
-### 1.5 Performance / Architecture Compliance
+### Test 5: CountText display
 
-| Check | Status | Notes |
-|---|---|---|
-| Slot pool reuses GameObjects (SetActive, no Destroy) | PASS | `InventoryPanel.cs:87-111` — Instantiate only when pool too small, SetActive for show/hide |
-| No Destroy/Instantiate on filter change | PASS | RefreshList only calls SetActive, never Destroy |
-| Filter logic centralized in InventoryPanel | PASS | All filtering in `OnFilterClicked`/`RefreshList` |
-| Selection state centralized in InventoryPanel | PASS | `selectedItem` field is single source of truth |
-| UI logic and data separated | PASS | ItemData (pure data) vs InventoryPanel/InventorySlotView (UI) |
-| No global singletons | PASS | No `Instance` pattern, no `DontDestroyOnLoad` |
-| No large Manager class | PASS | InventoryPanel is 168 lines, focused |
-| No LINQ chains | PASS | Uses `List<T>.FindAll` (predicate) — no LINQ allocations |
-| No string concatenation in loops | PASS | String interpolation only in UpdateDetailDisplay (single call per selection) |
+| Aspect | Status |
+|--------|--------|
+| Shows "Count: X / Y" format | UNVERIFIED — string concatenation preserved |
+| X matches filtered count | UNVERIFIED — uses _filteredResults.Count |
+| Y matches total Items count | UNVERIFIED — uses Items.Count |
 
-### 1.6 InventorySlotView
+### Test 6: Selected item persistence across filter changes
 
-| Check | Status | Notes |
-|---|---|---|
-| Null-safe text field assignments | PASS | `nameText != null`, `typeText != null`, `countText != null` guards |
-| Button auto-added if missing | PASS | `InventorySlotView.cs:30-33` |
-| Selected visual updates on Setup | PASS | `UpdateSelectedVisual(isSelected)` called at end of Setup |
-| Type display uses Chinese labels | PASS | switch expression maps Equipment→"装备", Consumable→"消耗品", Material→"材料" |
+| Aspect | Status |
+|--------|--------|
+| Selected item stays selected if still in results | UNVERIFIED — _selectedItem retained; selection check passes if ID matches |
+| Selected item clears when filtered out | UNVERIFIED — manual loop checks all results; if not found, _selectedItem=null, DetailText="No item selected" |
 
-### 1.7 Scope Check (No Unauthorized Changes)
+## GC Test Items
 
-| Check | Status | Notes |
-|---|---|---|
-| Only Inventory/ and Scenes/ touched | PASS | Git diff confirms: 18 files, all within allowed paths |
-| ProjectSettings/ untouched | PASS | Not in git diff |
-| Packages/ untouched | PASS | Not in git diff |
-| Library/ untouched | PASS | Not in git diff |
-| No drag-and-drop implemented | PASS | None found |
-| No network/save/backend | PASS | None found |
-| No Addressables | PASS | None found |
-| No new UI framework | PASS | Uses Unity built-in UGUI only |
+All marked **UNVERIFIED** — no Profiler access.
 
----
+| GC Issue | Verification Method | Status |
+|----------|-------------------|--------|
+| #1: No Update() timer | Code review — Update() method removed | VERIFIED (code) |
+| #2: No LINQ | Code review — `using System.Linq` removed, no LINQ calls remain | VERIFIED (code) |
+| #3: No ToLower() | Code review — `IndexOf(..., OrdinalIgnoreCase)` used | VERIFIED (code) |
+| #4: No Destroy in refresh | Code review — Destroy loop removed, SetActive used | VERIFIED (code) |
+| #5: No GetComponent per refresh | Code review — GetComponent only in pool-grow path | VERIFIED (code) |
+| #6: No Debug.Log | Code review — line removed | VERIFIED (code) |
+| #7: No intermediate string in RefreshList | Code review — SetData signature changed | VERIFIED (code) |
 
-## 2. NOT Verifiable Without Unity Editor
+## Remaining GC Allocations (not in scope of this fix)
 
-These items are **honestly unknown** and marked as UNVERIFIED:
+These allocations still exist but were NOT among the 7 targets:
 
-| # | Item | Requires | Why Blocked |
-|---|---|---|---|
-| 1 | **Compilation (0 errors)** | Unity Editor | C# files reference `UnityEngine`, `UnityEngine.UI`, `UnityEditor` — these assemblies only exist inside Unity. Cannot compile with `dotnet build` or `csc`. |
-| 2 | **Editor script execution** (`Tools > Setup Backpack UI`) | Unity Editor | The script uses `MenuItem`, `PrefabUtility`, `AssetDatabase`, `SerializedObject` — all Editor-only APIs. |
-| 3 | **SlotPrefab.prefab creation** | Editor script run | Prefab is generated at Editor time; does not exist in repo. |
-| 4 | **Serialized field wiring** | Editor script run | `SetPrivateField` uses `SerializedObject.FindProperty` — must run in Editor to verify fields resolve correctly. |
-| 5 | **Runtime Play mode behavior** | Unity Editor | Button clicks, scroll rect, layout, selection visuals all require Play mode. |
-| 6 | **EventSystem behavior** | Play mode | `EnsureEventSystem()` creates one if missing, but input routing needs runtime. |
-| 7 | **Canvas rendering** | Play mode | ScreenSpaceOverlay Canvas with ScaleWithScreenSize — visual correctness unknown. |
-| 8 | **Console error-free** | Play mode | No runtime logs can be checked. |
-| 9 | **Scene save persistence** | Unity Editor | Prefab references (e.g., `slotPrefab` in InventoryPanel) persist only after scene is saved. |
+- `Button.onClick.RemoveAllListeners()` + `AddListener(...)` in `SetData` — closure allocation per slot update
+- `item.Type.ToString()` in `SetData` — enum to string allocation
+- `SearchInput.text` / `TypeDropdown.value` property access — may allocate depending on Unity version
+- `CountText.text` string concatenation — once per refresh, acceptable with event-driven model
 
----
+## Conclusion
 
-## 3. Editor Script vs. Scene Reality
-
-### What the SDD Says (T4)
-
-> "创建 Demo 场景（Canvas + Panel + 按钮 + 详情文本 + Slot prefab）"
-
-The SDD implies the scene file should contain the Canvas and UI hierarchy.
-
-### What Actually Exists
-
-The scene file (`BackpackDemo.unity`, 309 lines of YAML) contains exactly:
-- **Main Camera** (fileID 23983930) with Transform, Camera, AudioListener
-- **Directional Light** (fileID 961786223) with Transform, Light
-
-**No Canvas. No Panel. No buttons. No scroll view. No detail panel.** The scene at rest is a bare Unity default scene.
-
-### How UI Gets Created
-
-The 530-line Editor script `BackpackSceneSetup.cs` builds the entire UI hierarchy at Editor time when the user runs **Tools > Setup Backpack UI**. It:
-1. Creates `SlotPrefab.prefab` in `Assets/Scripts/Inventory/`
-2. Creates Canvas, PanelBg, Title, FilterButtons row, ScrollView, DetailPanel
-3. Creates InventoryPanelController GameObject, attaches InventoryPanel component
-4. Wires all serialized field references via `SerializedObject.FindProperty`
-5. Ensures EventSystem exists
-
-### Gap
-
-The scene file does not match what the SDD describes for T4. The UI is not "in" the scene — it is generated by a tool. This is a one-time setup step, but:
-
-- Opening the scene fresh in Unity will show only Camera + Light
-- Running Play mode before running the menu item will show nothing (or errors)
-- The scene must be manually saved after running the setup script (noted in the script's log message on line 46)
-
----
-
-## 4. Summary
-
-| Category | Count | Status |
-|---|---|---|
-| Code review checks passed | 28 | PASS |
-| Code review checks failed | 0 | — |
-| Requires Unity Editor to verify | 9 | UNVERIFIED |
-| Compilation verified | 0 | NOT POSSIBLE |
-
-**Bottom line:** The code reads correctly for all SDD requirements. All logic paths (filter, select, clear, edge cases) are implemented. Architecture constraints are met. However, **nothing has been compiled or run**. The Editor script approach means the scene is not self-contained — it requires a manual setup step before first use.
+All 7 GC issues have been addressed in code. Functional equivalence to the original behavior has been preserved based on code review. Runtime verification with Unity Profiler is **not possible** in this environment — all runtime assertions are marked UNVERIFIED.
